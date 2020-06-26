@@ -1,0 +1,94 @@
+---
+title: "Novel Geomorph Terrain Analysis"
+author: "Matthew Ross"
+date: "6/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(raster)
+library(sf)
+library(mapview)
+library(terra)
+library(rayshader)
+library(whitebox)
+library(tidyverse)
+
+
+```
+
+
+## Whitebox super function
+
+Build a function that does ~ 10 relevant analyses for a given DEM. Use 
+Anna's sites as example. 
+
+```{r}
+#Get the raw tifs that ends with ($) .tif
+coastal_files <- list.files('data/in/coastal', pattern = '.tif$', full.names=T)
+coastal_names <- list.files('data/in/coastal', pattern = '.tif$')
+
+#Make a table for simpler names
+dem_table <- tibble(files=coastal_files,
+                    og_names = coastal_names,
+                    simple_names = c('NY_ditched_a',
+                                     'NY_ditched_b',
+                                     'NY_naturalsih',
+                                     'SC_natural_a',
+                                     'SC_natural_b'))
+
+
+
+
+super_whitebox <- function(index=1){
+  #Grab indexed file
+  dem_sub <- dem_table[index,]
+  #Name output folder
+  out_folder <- gsub(dem_sub$og_names,'',dem_sub$files) %>%
+    gsub('in','out',.)
+  
+  #Calculate ruggedness index
+  wbt_ruggedness_index(dem = dem_sub$files,
+                       output = paste0(out_folder,dem_sub$simple_names,'_ruggedness.tif'))
+  
+  wbt_elev_relative_to_min_max(dem = dem_sub$files,
+                               output = paste0(out_folder,dem_sub$simple_names,'_rel_elev.tif'))
+
+}
+
+map(1:5,super_whitebox)
+
+hyp_files <- list.files('data/out/coastal',
+                        pattern = 'rel_elev',
+                        full.names=T) %>%
+  paste0(.,collapse = ';')
+
+hyp_files
+wbt_hypsometric_analysis(hyp_files,output='data/out/coastal/hyp.html')
+
+
+mapview(check)
+check <- raster(dem_sub$files) %>%
+  projectRaster(.,crs = '+proj=epsg:2163')
+
+?projectRaster
+sc_check <- raster(dem_table$files[5])
+check[ check > 0] <- NA
+sc_check[sc_check > 0] <- NA
+
+
+plot(check)
+plot(sc_check)
+summary(check)
+ny_rugosity <- raster('data/out/coastal/NY_ditched_a_ruggedness.tif')
+
+sc_rugosity <- raster('data/out/coastal/SC_natural_b_ruggedness.tif')
+
+
+mean(as.vector(ny_rugosity),na.rm=T)
+mean(as.vector(sc_rugosity),na.rm=T)
+
+plot(sc_rugosity)
+plot(ny_rugosity)
+```
+
