@@ -3,6 +3,8 @@ title: "Novel Geomorph Terrain Analysis"
 author: "Matthew Ross"
 date: "6/19/2020"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -14,81 +16,449 @@ library(rayshader)
 library(whitebox)
 library(tidyverse)
 
+knitr::opts_chunk$set(warning = F, comment = F, message = F, cache=T,
+                      fig.width = 8, fig.height = 5)
 
 ```
 
+
+# Datasets and descriptions
+
+This portion of our novel geomorphology project is focused on examining 
+shifts in landscapes after human interventions, and answering the question
+"Do people have consistent impacts on geomorphic features? If so what are 
+these, and why do they happen?" We wanted to keep this analysis open ended 
+across landscape types, so we have four landscapes for analysis. 1) Wetlands
+impacted by ditching (or not). 2) Piedmont watersheds impacted by historical
+agriculture and erosion (or mostly not). 3) Appalachian watersheds that were
+mined or not, and 4) Coastal watersheds impacted by canals (or reconstructed without canals)
+
+## Piedmont watersheds
+
+This data comes from the Calhoun CZO [insert link] and John Mallard. John will write a description here.
+
+### Pre-processing
+
+The piedmont data comes as one overarching DEM, which needs to be broken 
+down into watersheds. We do that here:
+
+```{r}
+#File pointers
+o_dem <- 'data/in/calhoun/CalhounBigDEM.tif'
+c_dem <- 'data/in/calhoun/CalhounDEM.tif'
+```
+
+
+```{r, eval = F}
+#Reproject pour points
+st_read('data/in/calhoun/CalhounPourpoints.shp') %>%
+  st_transform(crs = st_crs(raster(c_dem))) %>%
+  st_write('data/in/calhoun/CalhounProjPoints.shp')
+
+#Read in reprojected pourpoints
+proj <- st_read('data/in/calhoun/CalhounProjPoints.shp') %>%
+  #buffer by 500m (iterated with watershed sizes)
+  st_buffer(500)
+
+#Trim up raster (which is enormous) by buffering pour poitns
+smaller <- terra::crop(rast(o_dem),proj)
+
+
+#Save smaller raster (hope it's not too small. Ask John)
+writeRaster(smaller,c_dem, overwrite = T)
+
+
+#Fill single cell pits (for hydrologic correctness)
+wbt_fill_single_cell_pits(c_dem,'data/out/calhoun/breach2.tif')
+
+#Breach depressions (better option that pit filling according to whitebox docu
+#mentation) The flat_increment bit was tricky for me and needed to be tuned.
+wbt_breach_depressions(c_dem,'data/out/calhoun/breached.tif',flat_increment=.1)
+
+
+#D8 pointer (what is a pointer? a flow direction grid? probably)
+wbt_d8_pointer('data/out/calhoun/breached.tif','data/out/calhoun/d8_pntr.tif')
+
+#D8 flow
+wbt_d8_flow_accumulation('data/out/calhoun/breached.tif','data/out/calhoun/d8_flow.tif',out_type='catchment area')
+
+
+#snap_points
+wbt_snap_pour_points('data/in/calhoun/CalhounProjPoints.shp','data/out/calhoun/d8_flow.tif',
+                 'data/out/calhoun/snapped_sites.shp',20)
+
+
+#Watershed delineation as "whole watersheds'
+wbt_unnest_basins('data/out/calhoun/d8_pntr.tif',
+                  'data/out/calhoun/snapped_sites.shp',
+                  'data/out/calhoun/cal_sheds.tif')
+
+
+```
+
+## Check calhoun watershed snaps. 
+
+```{r}
+
+snaps <- st_read('data/out/calhoun/snapped_sites.shp')
+pours <- st_read('data/in/calhoun/CalhounProjPoints.shp')
+
+
+mapview(snaps) | mapview(pours)
+```
+
+
+## Split watersheds into individual sheds
+```{r, eval = F}
+#Same order as read in (probably?)
+sheds <- rast('data/out/calhoun/cal_sheds_1.tif')
+
+#split sheds into subunits 
+shed_splitter <- function(index){
+  #Slow because domain is big
+  single_shed = mask(sheds,sheds != index, maskvalue = 1) %>%
+    trim(.)
+  
+  #Fast af, because crop and terra is awesome. 
+  elev_shed <- crop(rast(c_dem),single_shed) %>%
+    terra::mask(.,single_shed) %>%
+    trim(.) 
+
+
+  #Write it out with assumed shed name. Can fix if not in order from snap
+  terra::writeRaster(elev_shed,
+                     filename = paste0('data/in/calhoun/',
+                                      pours$wshd[index],
+                                      '.tif'),
+                     overwrite = T)
+}
+
+walk(1:4,shed_splitter)
+```
+
+
+## MTM Data prep
+
+OMG my old workflowss are such a mess. Took me forever to find this data. 
+But I eventually found clean watershed elevation outlines for pre and post mining
+watersheds in the mud river. 
 
 ## Whitebox super function
 
 Build a function that does ~ 10 relevant analyses for a given DEM. Use 
 Anna's sites as example. 
 
+
+- Add Ryan Emmanuel DEMS from paper
+- Get Mallard
+
 ```{r}
 #Get the raw tifs that ends with ($) .tif
-coastal_files <- list.files('data/in/coastal', pattern = '.tif$', full.names=T)
-coastal_names <- list.files('data/in/coastal', pattern = '.tif$')
 
 #Make a table for simpler names
-dem_table <- tibble(files=coastal_files,
-                    og_names = coastal_names,
-                    simple_names = c('NY_ditched_a',
+#I'm ashamed of how manual this is. Was just easier.
+dem_table <- tibble(files=c(list.files('data/in/coastal', 
+                                     pattern = '.tif$', full.names=T),
+                            'data/in/calhoun/Bowl.tif',
+                            'data/in/calhoun/WS2.tif',
+                            'data/in/calhoun/WS3.tif',
+                            'data/in/calhoun/WS4.tif',
+                            list.files('data/in/mtm',full.names=T)),
+                    og_names = c(list.files('data/in/coastal',
+                                          pattern = '.tif$'),
+                                 'Bowl.tif',
+                                 'WS2.tif',
+                                 'WS3.tif',
+                                 'WS4.tif',
+                                 list.files('data/in/mtm')),
+                    simple_names = c(
+                                     'NY_ditched_a',
                                      'NY_ditched_b',
                                      'NY_naturalsih',
                                      'SC_natural_a',
-                                     'SC_natural_b'))
+                                     'SC_natural_b',
+                                     'Bowl',
+                                     'WS1',
+                                     'Ws2',
+                                     'WS3',
+                                     list.files('data/in/mtm') %>%
+                                       gsub('.tif','',.)),
+                    treatment = c('novel','novel',
+                                  'natural','natural','natural','natural',
+                                  'novel','novel','novel',
+                                  rep(c('novel','natural'),times=7))) 
 
+# In retrospect this is kind of wasteful. WBT is fast AF and I should 
+#probably just wrap the high level analyses in here. 
+#But whatever. 
+super_whitebox <- function(files,og_names,simple_names,treatment){
 
-
-
-super_whitebox <- function(index=1){
-  #Grab indexed file
-  dem_sub <- dem_table[index,]
+  
+  paster <- function(post = 'wbt_function'){
+    paste0(out_folder,simple_names,post,'.tif')
+  }
+  
   #Name output folder
-  out_folder <- gsub(dem_sub$og_names,'',dem_sub$files) %>%
+  out_folder <- gsub(og_names,'',files) %>%
     gsub('in','out',.)
   
   #Calculate ruggedness index
-  wbt_ruggedness_index(dem = dem_sub$files,
-                       output = paste0(out_folder,dem_sub$simple_names,'_ruggedness.tif'))
+  wbt_ruggedness_index(dem = files,
+                       output = paster('_ruggedness'))
   
-  wbt_elev_relative_to_min_max(dem = dem_sub$files,
-                               output = paste0(out_folder,dem_sub$simple_names,'_rel_elev.tif'))
-
+  #Calculate releative elevation
+  wbt_elev_relative_to_min_max(dem = files,
+                               output = paster('_rel_elev'))
+  
+  #Edge density
+  wbt_edge_density(files,
+                   output = paster('_edge_density'),
+                   norm_diff = 5)
+  
+  #surface area ratio 
+  wbt_surface_area_ratio(files,
+                         output = paster('_surface_area'))
+  
+  
+  #Breach depressions (better option that pit filling according to whitebox docu
+  #mentation) The flat_increment bit was tricky for me and needed to be tuned.
+  wbt_breach_depressions(files,
+                         output = paster('_breach'),
+                         flat_increment=.1)
+  
+  
+  #D8 flow
+  wbt_d8_flow_accumulation(paster('_breach'),
+                           paster('_d8_faa'),
+                           out_type = 'catchment area')
+                           
 }
 
-map(1:5,super_whitebox)
-
-hyp_files <- list.files('data/out/coastal',
-                        pattern = 'rel_elev',
-                        full.names=T) %>%
-  paste0(.,collapse = ';')
-
-hyp_files
-wbt_hypsometric_analysis(hyp_files,output='data/out/coastal/hyp.html')
+pwalk(dem_table,super_whitebox)
+```
 
 
-mapview(check)
-check <- raster(dem_sub$files) %>%
-  projectRaster(.,crs = '+proj=epsg:2163')
-
-?projectRaster
-sc_check <- raster(dem_table$files[5])
-check[ check > 0] <- NA
-sc_check[sc_check > 0] <- NA
 
 
-plot(check)
-plot(sc_check)
-summary(check)
-ny_rugosity <- raster('data/out/coastal/NY_ditched_a_ruggedness.tif')
-
-sc_rugosity <- raster('data/out/coastal/SC_natural_b_ruggedness.tif')
+## Comparing other metrics (by hand... womp womp)
 
 
-mean(as.vector(ny_rugosity),na.rm=T)
-mean(as.vector(sc_rugosity),na.rm=T)
+```{r}
 
-plot(sc_rugosity)
-plot(ny_rugosity)
+reader <- function(r){
+  v <- as.vector(rast(r)) %>% na.omit()
+  place <- gsub(paste0('_',analysis,'.tif'),'',r)
+  
+  split_strings <- str_split_fixed(r,'/',n=4)
+  
+  
+  table <- tibble(value = v,
+                  name = analysis,
+                  domain = split_strings[,3],
+                  simple_names = gsub(paste0('_',analysis,'.tif'),'',split_strings[,4]))
+}
+
+
+comp_function <- function(analysis = 'ruggedness'){
+  
+  files <- list.files('data/out',
+                      pattern = analysis,
+                      recursive = T, 
+                      full.names = T) 
+  
+    reader <- function(r){
+      v <- as.vector(rast(r)) %>% na.omit() 
+      v[v < -30] <- NA
+      place <- gsub(paste0('_',analysis,'.tif'),'',r)
+      
+      split_strings <- str_split_fixed(r,'/',n=4)
+      
+      
+      table <- tibble(value = v,
+                      name = analysis,
+                      domain = split_strings[,3],
+                      simple_names = gsub(paste0('_',analysis,'.tif'),
+                                          '',split_strings[,4]))
+  }
+  
+  t <- map_dfr(files,reader) %>%
+    inner_join(dem_table)
+  
+  # Way overkill to plot all data, but whatever. 
+  gplot <- ggplot(t,aes(value, color = treatment, group = simple_names)) + 
+    geom_density() + 
+    facet_wrap(~domain,scales = 'free', ncol = 1 ) + 
+    ggthemes::theme_few() + 
+    ggtitle(analysis) + 
+    scale_color_manual(name = '',values = c('green3','black')) + 
+    theme(legend.position = c('top'), legend.direction = 'horizontal')
+  
+  
+  summary <- t %>% 
+    group_by(domain,treatment,simple_names) %>%
+    summarize(median = median(value),
+              mean = mean(value),
+              min = min(value),
+              max = max(value)) %>%
+    mutate_if(is.numeric,round,2)
+  
+  
+  return(list(gplot,summary))
+}
+
+
+
+```
+
+
+### Ruggedness
+
+```{r}
+rug <- comp_function(analysis = 'ruggedness')
+
+rug[[1]]
+
+knitr::kable(rug[[2]])
+```
+
+
+### Edge density
+
+Truly don't know what this means
+
+```{r}
+
+edge_dens <- comp_function('edge_density')
+
+edge_dens[[1]]
+```
+
+
+
+### Elevation 
+
+```{r}
+rel_elev <- comp_function('breach')
+
+rel_elev[[1]]
+
+```
+
+
+### FAA
+
+No clue how to interpret in wetlands. Probably deeply flawed
+
+```{r}
+faa <- comp_function('d8_faa')
+
+faa[[1]] + 
+  scale_x_log10() 
+```
+
+
+
+### Surface area
+
+Like edge density. Some kind of relative roughness? 
+
+```{r}
+sa <- comp_function('surface_area')
+
+sa[[1]]
+```
+
+
+### Hypsometry 
+
+This requires a different function.
+
+#### Raw Elevation hypsometry
+```{r}
+
+
+hyp_reader <- function(files,og_names,simple_names,treatment){
+    v <- as.vector(rast(files)) %>% na.omit() %>%
+      round(.,1)
+    
+    unique_e <- unique(v)
+    
+    
+    e.table <- tibble(elev = v) %>%
+      mutate(e_bins = cut(elev,breaks=c(-Inf,unique_e,Inf))) %>% 
+      group_by(e_bins) %>%
+      summarize(count = n(),
+                freq = 100*count/length(v),
+                elev = first(elev) %>% na.omit(.)) %>%
+      mutate(rel_elev = 100*((elev - min(elev))/(max(elev)-min(elev)))) %>%
+      arrange(-elev) %>%
+      mutate(area_above = cumsum(freq),
+              simple_names = simple_names,
+              treatment = treatment,
+             domain = str_split_fixed(files,'/',4)[,3])
+
+    
+}
+
+hyp_data <- pmap_dfr(dem_table,hyp_reader)
+
+
+ggplot(hyp_data,aes(x=area_above, y = elev, color = treatment, group = simple_names)) + 
+  geom_line() + 
+  facet_wrap(~domain,nrow = 1, scales = 'free') + 
+  ggthemes::theme_few() + 
+  scale_color_manual(name = '',values = c('green3','black')) + 
+  theme(legend.position = c('top'), legend.direction = 'horizontal')
+
+```
+
+#### Relative elevation hyp
+
+```{r}
+ggplot(hyp_data,aes(x=area_above, y = rel_elev, color = treatment, group = simple_names)) + 
+  geom_line() + 
+  facet_wrap(~domain,nrow = 1, scales = 'free') + 
+  ggthemes::theme_few() + 
+  scale_color_manual(name = '',values = c('green3','black')) + 
+  theme(legend.position = c('top'), legend.direction = 'horizontal')
+
+```
+
+
+## Abandoned code that might be useful someday
+
+
+```{r}
+# #Transform all coastal to 2163 projection 
+# transformer <- function(files,og_names,simple_names){
+#   
+#   #I don't know how to define this outside of the
+#   #function without breaking the pmap functionality
+#   # which is somewhat like a with() call here. 
+#   paster <- function(post = 'wbt_function'){
+#     paste0(out_folder,simple_names,post,'.tif')
+#   }
+#   
+#   orig_proj <- rast(files)
+#   
+#     #Name output folder
+#   out_folder <- gsub(og_names,'',files) %>%
+#     gsub('in','out',.)
+#   
+# 
+#   reproj <- project(orig_proj,'+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs') %>%
+#     clamp(., lower = -15, upper = 15, values = NA)
+#   
+# 
+#   terra::writeRaster(reproj,paster('_2163'),overwrite = T)
+# }
+# 
+# 
+# # I think I finally understand pmap on dfs
+# # But this is actually a pwalk situation (no direct output, only side
+# # effects (as in projecting and saving reprojected rasters))
+# #Pwalk requires that all column names be options in the call
+# #Makes sense? I guess? 
+# pwalk(dem_table,transformer)
 ```
 
