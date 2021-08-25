@@ -13,10 +13,11 @@ library(sf)
 library(mapview)
 library(terra)
 library(rayshader)
+#devtools::install_github("giswqs/whiteboxR")
+
 library(whitebox)
 library(tidyverse)
 
-#install.packages("whitebox", repos="http://R-Forge.R-project.org")
 
 knitr::opts_chunk$set(warning = F, comment = F,
                       message = F, cache=T,
@@ -31,56 +32,49 @@ This portion of our novel geomorphology project is focused on examining
 shifts in landscapes after human interventions, and answering the question
 "Do people have consistent impacts on geomorphic features? If so what are 
 these, and why do they happen?" We wanted to keep this analysis open ended 
-across landscape types, so we have four landscapes for analysis. 1) Wetlands
+across landscape types, so we have three landscapes for analysis. 1) Wetlands
 impacted by ditching (or not). 2) Piedmont watersheds impacted by historical
-agriculture and erosion (or mostly not). 3) Appalachian watersheds that were
-mined or not, and 4) Coastal watersheds impacted by canals (or reconstructed without canals)
+agriculture and erosion (or mostly not). 3) Appalachian watersheds pre and post-mining.
 
 ## Piedmont watersheds
 
-This data comes from the Calhoun CZO [insert link] and John Mallard. John will write a description here.
+This data comes from the Calhoun CZO [https://www.hydroshare.org/resource/cbdf5af338214abea9bd3e993aae4d01/] 
+and John Mallard. John will write a description here.
 
-### Pre-processing
+### Watershed delineation and processing
 
-The piedmont data comes as one overarching DEM, which needs to be broken 
-down into watersheds. We do that here:
+To conduct our analyses we need to first prep the DEM and delineate some watersheds
+using Whitebox tools. 
 
-```{r}
-#File pointers
-o_dem <- 'data/in/calhoun/CalhounBigDEM.tif'
-c_dem <- 'data/in/calhoun/CalhounDEM.tif'
-```
 
 
 
 ```{r, eval = F}
-#Reproject and combine pour points
 
-
-st_read('data/in/calhoun/CalhounPourpoints.shp') %>% 
-  rename(id = wshd) %>%
-  mutate(Humans = c(0,1,1,1)) %>%
-  st_transform(crs = st_crs(raster(c_dem))) %>%
-  st_write('data/in/calhoun/CalhounProjPoints.shp',
-           delete_layer = T)
-
-#Read in reprojected pourpoints
-proj <- st_read('data/in/calhoun/CalhounProjPoints.shp') %>%
-  #buffer by 500m (iterated with watershed sizes) to ensure whole watershed captured
-  st_buffer(500)
+#File pointers
+o_dem <- 'data/in/calhoun/CalhounBigDEM.tif'
 
 
 
-#Fill single cell pits (for hydrologic correctness)
-wbt_fill_single_cell_pits(o_dem,
-                          'data/out/calhoun/breach2.tif')
+# #Fill single cell pits (for hydrologic correctness)
+# wbt_fill_single_cell_pits(o_dem,
+#                           'data/out/calhoun/breach2.tif')
 
-#Breach depressions (better option that pit filling according to whitebox docu
-#mentation) The flat_increment bit was tricky for me and needed to be tuned.
+# #Breach depressions (better option that pit filling according to whitebox docu
+# #mentation) The flat_increment bit was tricky for me and needed to be tuned.
+# #### ----- WARNING Takes ~ 10 minutes with 18 cores ----- ####
+
+
+
+check <- rast('data/in/calhoun/CalhounBigDEM.tif')  %>%
+  crop(.,rast('data/in/calhoun/Bowl.tif'))
+
+
+writeRaster(check,'data/in/test.tif', overwrite = T)
+
 wbt_breach_depressions(o_dem,
-                       'data/out/calhoun/breached.tif',
-                       flat_increment=.1)
-
+                                  flat_increment = 0.1,
+                       'data/out/calhoun/breached.tif')
 
 #D8 pointer (what is a pointer? a flow direction grid? probably)
 wbt_d8_pointer('data/out/calhoun/breached.tif',
@@ -91,6 +85,9 @@ wbt_d8_flow_accumulation('data/out/calhoun/breached.tif',
                          'data/out/calhoun/d8_flow.tif',
                          out_type='catchment area')
 
+
+
+
 # d8_max_1h <- rast('data/out/calhoun/d8_flow.tif')
 # d8_max_1h[d8_max_1h > (1000*1000)] <- 0
 # terra::writeRaster(d8_max_1k, 'data/out/calhoun/d8_max1k.tif')
@@ -99,13 +96,18 @@ wbt_slope(o_dem,
           'data/out/calhoun/slope.tif',
           units = 'percent')
 
+wbt_slope('data/out/calhoun/breached.tif',
+          'data/out/calhoun/breach_slope.tif',
+          units = 'percent')
+
+## MD infinity algorithm
 wbt_md_inf_flow_accumulation('data/out/calhoun/breached.tif',
                              'data/out/calhoun/md_inf.tif',
                              out_type = 'catchment area')
-#snap_points
+#snap_points to outlets
 wbt_snap_pour_points('data/in/calhoun/CalhounProjPoints.shp',
                      'data/out/calhoun/d8_flow.tif',
-                     'data/out/calhoun/snapped_sites.shp',20)
+                     'data/out/calhoun/snapped_sites.shp',10)
 
 
 
@@ -113,11 +115,6 @@ wbt_snap_pour_points('data/in/calhoun/CalhounProjPoints.shp',
 wbt_snap_pour_points('data/in/calhoun/CalhounChannelHeads.shp',
                      'data/out/calhoun/d8_flow.tif',
                      'data/out/calhoun/snapped_heads.shp',20)
-
-#snap channel heads 500m to get a bunch of 1km catchments
-wbt_snap_pour_points('data/in/calhoun/CalhounChannelHeads.shp',
-                     'data/out/calhoun/d8_max1k.tif',
-                     'data/out/calhoun/big_snap.shp',500)
 
 # d8_pntr <- rast('data/out/calhoun/d8_pntr.tif')
 # 
@@ -137,29 +134,24 @@ wbt_unnest_basins('data/out/calhoun/d8_pntr.tif',
 sheds_wide <- rast('data/out/calhoun/cal_sheds_1.tif') %>%
   trim(.)
 
-terra::writeRaster(sheds_wide,'data/out/calhoun/cal_sheds.tif')
-```
-
-## Check calhoun watershed snaps. 
-
-```{r}
-
-snaps <- st_read('data/out/calhoun/snapped_sites.shp')
-pours <- st_read('data/in/calhoun/CalhounProjPoints.shp')
 
 
-mapview(snaps) | mapview(pours)
+terra::writeRaster(sheds_wide,'data/out/calhoun/cal_sheds.tif',
+                   overwrite = T)
 ```
 
 
 ## Split watersheds into individual sheds
+
 ```{r, eval = F}
 #Same order as read in (probably?)
 
 sheds <- rast('data/out/calhoun/cal_sheds.tif')
 
 
-mapview(sheds)
+pours <- st_read('data/in/calhoun/CalhounProjPoints.shp')
+
+o_dem <- 'data/in/calhoun/CalhounDEM.tif'
 
 #split sheds into subunits 
 shed_splitter <- function(index){
@@ -168,10 +160,11 @@ shed_splitter <- function(index){
     trim(.)
   
   #Fast af, because crop and terra is awesome. 
-  elev_shed <- crop(rast(c_dem),single_shed) %>%
+  elev_shed <- crop(rast(o_dem),single_shed) %>%
     terra::mask(.,single_shed) %>%
     trim(.) 
-
+  
+  plot(elev_shed)
 
   #Write it out with assumed shed name. Can fix if not in order from snap
   terra::writeRaster(elev_shed,
@@ -181,26 +174,18 @@ shed_splitter <- function(index){
                      overwrite = T)
 }
 
-walk(1:10,shed_splitter)
+walk(1:4,shed_splitter)
 ```
 
 
-## MTM Data prep
 
-OMG my old workflowss are such a mess. Took me forever to find this data. 
-But I eventually found clean watershed elevation outlines for pre and post mining
-watersheds in the mud river. 
 
 ## Whitebox super function
 
-Build a function that does ~ 10 relevant analyses for a given DEM. Use 
-Anna's sites as example. 
+Build a function that does ~ 10 relevant analyses for a given DEM.  
 
 
-- Add Ryan Emmanuel DEMS from paper
-- Get Mallard
-
-```{r, eval = F}
+```{r}
 #Get the raw tifs that ends with ($) .tif
 
 #Make a table for simpler names
@@ -479,10 +464,8 @@ ggplot(hyp_data,aes(x=area_above, y = rel_elev, color = treatment, group = simpl
   geom_line() + 
   facet_wrap(~domain,nrow = 1, scales = 'free') + 
   ggthemes::theme_few() + 
-  scale_color_manual(name = '',values = c('black','red')) + 
-  theme(legend.position = c('top'), legend.direction = 'horizontal') + 
-  ylab('Relative elevation (%)') + 
-  xlab('Area above (%)')
+  scale_color_manual(name = '',values = c('green3','black')) + 
+  theme(legend.position = c('top'), legend.direction = 'horizontal')
 
 ```
 

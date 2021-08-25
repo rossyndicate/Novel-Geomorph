@@ -1,0 +1,473 @@
+---
+title: "2_czo_ch"
+author: "Matthew Ross"
+date: "11/23/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+
+library(sf)
+library(raster)
+library(terra)
+library(leaflet)
+library(stars)
+library(leafem)
+library(mapview)
+library(tidyverse)
+library(ggthemes)
+library(rayshader)
+library(patchwork)
+
+#devtools::install_github('tylermorganwall/rayshader')
+```
+
+
+# Analyses of human-induced changes
+
+## 3D Viz 
+
+
+Rayshader super function
+
+```{r}
+
+```
+
+### Calhoun
+
+#### Bowl (natural)
+
+```{r}
+
+
+
+fac_colors <- colorRampPalette(colors=c('white','white','#00c37f','blue','purple4'))(20)
+
+
+
+
+cal_viz <- function(dem_file = 'Bowl'){
+  dem <- raster(paste0('data/in/calhoun/',dem_file,'.tif'))
+  
+  fac = raster(paste0('data/out/calhoun/md_inf.tif')) %>%
+    crop(.,dem) %>%
+    mask(., dem) %>%
+    log10(.)
+  
+  
+  
+  dem_mat <- raster_to_matrix(dem)
+
+  #Generate the flow accume overlay to drape over hillshade
+  tempfilename = tempfile()
+  png(tempfilename,width = nrow(dem_mat),height=ncol(dem_mat))
+  par(mar = c(0,0,0,0),bg='transparent')
+  raster::image((fac),
+                axes = FALSE,xlab='',ylab='',
+                col=fac_colors)
+  
+  dev.off()
+  water_over = png::readPNG(tempfilename)
+  
+
+  
+  rays <- ray_shade(dem_mat, zscale = 1,
+                    sunaltitude = 45,
+                    sunangle = 0)
+  
+
+  
+  dem_mat %>%
+    sphere_shade(texture = 'bw') %>% 
+    add_overlay(water_over) %>%
+    add_shadow(.,rays, max_darken = 0.5,
+               rescale = F) %>%
+    add_shadow(lamb_shade(dem_mat,
+                          zscale = 1),
+               0) %>%
+    add_shadow(texture_shade(dem_mat, detail = 0.8,
+                             contrast = 9,
+                             brightness = 11),
+               0) %>%
+    plot_3d(dem_mat, zscale = 1)
+  
+}
+
+
+
+cal_viz()
+render_scalebar(limits = c(0,250),
+                position = 'W',
+                segments = 2,
+                scale_length = c(0.25,0.75),
+                label_unit = 'm',
+                color_first = 'gray45',
+                color_second = 'black')
+
+```
+
+
+#### WS2 (gullied)
+
+```{r}
+
+cal_viz('WS2')
+
+```
+
+
+### MTM
+
+```{r}
+
+mtm_viz <- function(dem_file = 'horse_post'){
+  dem <- raster(paste0('data/in/mtm/',dem_file,'.tif'))
+  
+  fac <- raster(paste0('data/out/mtm/',dem_file,'_d8_faa.tif')) %>%
+    log10(.)
+  
+  dem_mat <- raster_to_matrix(dem)
+  
+  
+  #Generate the flow accume overlay to drape over hillshade
+  tempfilename = tempfile()
+  png(tempfilename,width = nrow(dem_mat),height=ncol(dem_mat))
+  par(mar = c(0,0,0,0),bg='transparent')
+  raster::image((fac),
+                axes = FALSE,xlab='',ylab='',
+                col=fac_colors)
+  # raster::image(fliplr(shed_outlines),
+  #               axes = FALSE,xlab='',ylab='',
+  #               col=c('#EB008B','#0085ee'),add=T)
+  # raster::image(fliplr(cross_outlines),
+  #               axes=F,xlab='',ylab='',
+  #               col=c('black'),add=T)
+  dev.off()
+  
+  water_over = png::readPNG(tempfilename)
+  
+  dem_mat %>%
+    sphere_shade(texture = 'bw') %>%
+    add_overlay(water_over) %>%
+    add_shadow(ray_shade(dem_mat, 
+                         zscale = 5,
+                         sunaltitude = 45,
+                         sunangle = 0),
+               max_darken = 0.5) %>%
+    add_shadow(lamb_shade(dem_mat,
+                          zscale = 5),
+               0) %>%
+    add_shadow(texture_shade(dem_mat, detail = 0.8,
+                             contrast = 9,
+                             brightness = 11),
+               0) %>%
+    plot_3d(dem_mat, zscale = 5)
+
+}
+
+
+mtm_viz('horse_post')
+```
+
+
+### Wetlands
+
+
+```{r}
+sc <- raster('data/in/coastal/SC_PostSandyDEM_2014_natural_a.tif')
+ny <- raster('data/in/coastal/NY_PostSandyDEM_2014_ditched_a.tif')
+
+
+
+wet_colors <- colorRampPalette(colors=c('white','white','#00c37f','blue','purple4'))(20)
+par(bg='blue3')
+plot(ny, col=rev(wet_colors), bg = 'blue')
+
+dev.off()
+
+```
+
+### Site Map
+
+```{r}
+
+cals <- st_bbox(raster('data/in/calhoun/Bowl.tif')) %>% st_as_sfc(.) %>%
+  st_transform(2163) %>%
+  st_buffer(20000)
+mtms <- st_bbox(raster('data/in/mtm/horse_pre.tif')) %>% st_as_sfc(.) %>%
+  st_transform(2163)%>%
+  st_buffer(20000)
+sc_box <- st_bbox(sc) %>% st_as_sfc(.) %>%
+  st_transform(2163)%>%
+  st_buffer(20000)
+ny_box <- st_bbox(ny) %>% st_as_sfc(.) %>%
+  st_transform(2163)%>%
+  st_buffer(20000)
+
+
+sites <- c(cals,mtms,sc_box,ny_box) %>%
+  st_buffer(20000) 
+
+st_crs(sites) <- 2163
+mapview(sites)
+
+
+states <- USAboundaries::us_states() %>% 
+  st_transform(2163) %>%
+  .[st_bbox(sites) %>% st_as_sfc(.),] %>%
+  filter(!stusps %in% c('OH','KY','TN','GA'))
+
+sites
+library(tmap)
+tm_shape(states) + 
+  tm_borders(col = 'black') +
+tm_shape(cals) + 
+  tm_borders(col = 'darkorange1') + 
+tm_shape(mtms) + 
+  tm_borders(col = 'blue') + 
+tm_shape(ny_box) + 
+  tm_borders(col = 'firebrick1') + 
+tm_shape(sc_box) + 
+  tm_borders(col = 'firebrick4') 
+```
+
+
+## Drainage density and proxies
+
+3 Analyses for 3 landforms
+
+- Channel outlet density for wetlands
+- Channel head density for gullies
+- Drainage density for MTM watersheds
+
+
+### Calhoun data prep
+
+```{r}
+
+
+md_inf <- read_stars('data/out/calhoun/md_inf.tif')
+slope <- read_stars('data/out/calhoun/slope.tif')
+
+cal_snap <- st_read('data/out/calhoun/snapped_heads.shp') %>%
+  st_transform(st_crs(md_inf)) %>%
+  mutate(type = 'snapped')
+
+
+
+cal_flow <- cal_snap %>%
+  mutate(inf_uaa = st_extract(md_inf,cal_snap) %>% pull(1),
+         slope = st_extract(slope,cal_snap) %>% pull(1))
+
+```
+
+
+
+### Calhoun Channel Head Slope vs Area
+
+
+
+
+```{r}
+
+cal_g <- ggplot(cal_flow, aes(x=inf_uaa/(1000*1000),y=slope,color=as.factor(Humans))) + 
+  geom_point(size = 2) + 
+  scale_x_log10(breaks = c(0.0001,0.001,0.01,0.1),
+                labels = c('0.0001','0.001','0.01','0.1'),
+                limits = c(0.0001,0.1)) + 
+  scale_y_log10() + 
+  theme_few() + 
+  scale_color_manual(name = '',
+                     values = c('black','red'),
+                     labels = rev(c('novel',
+                                'natural'))) + 
+  xlab(expression(paste('Watershed Area (',m^2,')',))) + 
+  ylab('Slope (degrees)') + 
+  theme(legend.position = c(0.6,0.2)) + 
+  labs(subtitle = 'Channel head locations') + 
+  guides(color = 'none')
+
+
+
+cal_g
+```
+
+## MTM Drainage Density (just 7 sites)
+
+
+```{r}
+facs <- list.files('data/out/mtm',
+                   'faa.tif')
+
+drain_length <- function(fac = facs[1]){
+  fac_file <- paste0('data/out/mtm/',fac)
+  
+  uaa <- rast(fac_file) 
+  area_km2 = max(values(uaa),na.rm = T)/(1000*1000)
+  uaa[uaa < 8000] <- NA
+
+  strm_length <- values(uaa) %>%
+    .[!is.na(.)] %>%
+    length(.)/1000
+  tibble (area_km2,strm_length,
+          site = str_split_fixed(fac,'_',3)[1],
+          treat = str_split_fixed(fac,'_',3)[2])
+}
+
+t <- map_df(facs,drain_length)
+
+mtm_g
+
+mtm_g <- ggplot(t,aes(x=area_km2,
+             y = strm_length,
+             color = treat)) + 
+  geom_point() + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  ylab('Stream Length (km)') + 
+  xlab(expression(paste('Watershed Area (k',m^2,')'))) + 
+  theme_few() + 
+  scale_color_manual(values = c('red','black'),
+                     name = '',
+                     labels = c('novel','natural')) +  
+  theme(legend.position = c(0.2,0.8)) + 
+  labs(subtitle = 'Drainage density') + 
+  theme(legend.background = element_rect(fill = NA))
+
+mtm_g
+```
+
+
+
+## Wetland outlet density
+
+```{r}
+
+outlets <- read_csv('data/in/coastal/wetland_density.csv') %>%
+  filter(AreaKM < 4)
+
+
+
+
+
+
+
+
+wet_out <- ggplot(outlets, aes(y = Number_Outlets,
+                    x = AreaKM,
+                    color = Altered)) + 
+  geom_point() + 
+  scale_color_manual(values = c('black','red'),
+                     labels = c('natural','novel'),
+                     name = '') + 
+  theme_few() + 
+  theme(legend.position = c(0.8,0.5)) + 
+  ylab('# of outlets') + 
+  xlab(expression(paste('Wetland area (k',m^2,')'))) + 
+  labs(subtitle = 'Drainage outlet density') + 
+  guides(color = 'none') 
+
+
+```
+
+
+
+## Combo
+
+```{r}
+
+
+
+
+Left <- cal_g / mtm_g / wet_out 
+
+```
+## Hyps
+
+```{r}
+
+dem_table <- tibble(files=c(list.files('data/in/coastal', 
+                                     pattern = '.tif$', full.names=T),
+                            'data/in/calhoun/Bowl.tif',
+                            'data/in/calhoun/WS2.tif',
+                            'data/in/calhoun/WS3.tif',
+                            'data/in/calhoun/WS4.tif',
+                            list.files('data/in/mtm',full.names=T)),
+                    og_names = c(list.files('data/in/coastal',
+                                          pattern = '.tif$'),
+                                 'Bowl.tif',
+                                 'WS2.tif',
+                                 'WS3.tif',
+                                 'WS4.tif',
+                                 list.files('data/in/mtm')),
+                    simple_names = c(
+                                     'NY_ditched_a',
+                                     'NY_ditched_b',
+                                     'NY_naturalsih',
+                                     'SC_natural_a',
+                                     'SC_natural_b',
+                                     'Bowl',
+                                     'WS1',
+                                     'Ws2',
+                                     'WS3',
+                                     list.files('data/in/mtm') %>%
+                                       gsub('.tif','',.)),
+                    treatment = c('novel','novel',
+                                  'natural','natural','natural','natural',
+                                  'novel','novel','novel',
+                                  rep(c('novel','natural'),times=7))) 
+
+
+files = dem_table$files[1]
+og_names = dem_table$og_names[1]
+simple_names = dem_table$simple_names[1]
+treatment = dem_table$treatment[1]
+
+
+
+hyp_reader <- function(files,og_names,simple_names,treatment){
+    v <- as.vector(rast(files)) %>% na.omit() %>%
+      round(.,1)
+    
+    unique_e <- unique(v)
+    
+    
+    e.table <- tibble(elev = v) %>%
+      mutate(e_bins = cut(elev,breaks=c(-Inf,unique_e,Inf))) %>% 
+      group_by(e_bins) %>%
+      summarize(count = n(),
+                freq = 100*count/length(v),
+                elev = first(elev) %>% na.omit(.)) %>%
+      mutate(rel_elev = 100*((elev - min(elev))/(max(elev)-min(elev)))) %>%
+      arrange(-elev) %>%
+      mutate(area_above = cumsum(freq),
+              simple_names = simple_names,
+              treatment = treatment,
+             domain = str_split_fixed(files,'/',4)[,3])
+
+    
+}
+
+hyp_data <- pmap_dfr(dem_table,hyp_reader)
+
+hypg<- ggplot(hyp_data,aes(x=area_above, y = rel_elev, color = treatment, group = simple_names)) + 
+  geom_line() + 
+  facet_wrap(~domain,nrow = 3, scales = 'free') + 
+  ggthemes::theme_few() + 
+  scale_color_manual(name = '',values = c('black','red')) + 
+  theme(legend.position = c(0.4,0.4), legend.direction = 'horizontal') + 
+  ylab('Relative elevation (%)') + 
+  xlab('Area above (%)')
+
+
+
+## Fix order. 
+hypg
+Left
+
+hypg
+```
+
